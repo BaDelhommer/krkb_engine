@@ -5,7 +5,97 @@ import "core:fmt"
 import "core:mem"
 import w32 "core:sys/windows"
 
+game_offscreen_buffer :: struct {
+	info:            w32.BITMAPINFO,
+	memory:          []u32,
+	width:           i32,
+	height:          i32,
+	bytes_per_pixel: i32,
+	pitch:           i32,
+}
+
+window_dimension :: struct {
+	width, height: u32,
+}
+
+GlobalBackBuffer: game_offscreen_buffer
 GlobalRunning: bool = false
+
+InitBackBuffer :: proc(Buffer: ^game_offscreen_buffer, width, height: i32) {
+
+	if Buffer.memory != nil {
+		FreeBackBuffer(Buffer)
+	}
+
+	Buffer.width = width
+	Buffer.height = height
+	Buffer.bytes_per_pixel = 4
+	Buffer.pitch = width * GlobalBackBuffer.bytes_per_pixel
+
+	Buffer.info.bmiHeader.biSize = size_of(Buffer.info.bmiHeader)
+	Buffer.info.bmiHeader.biWidth = Buffer.width
+	Buffer.info.bmiHeader.biHeight = Buffer.height
+	Buffer.info.bmiHeader.biPlanes = 1
+	Buffer.info.bmiHeader.biBitCount = 32
+	Buffer.info.bmiHeader.biCompression = w32.BI_RGB
+
+	total_pixels := width * height
+	Buffer.memory = make([]u32, total_pixels)
+}
+
+FreeBackBuffer :: proc(Buffer: ^game_offscreen_buffer) {
+	delete(Buffer.memory)
+}
+
+RenderWeirdGradient :: proc(offset_x, offset_y: i32) {
+	for y in 0 ..< GlobalBackBuffer.height {
+		for x in 0 ..< GlobalBackBuffer.width {
+			index := y * GlobalBackBuffer.width + x
+
+			blue := u8(x + offset_x)
+			green := u8(y + offset_y)
+			red := u8(128)
+			alpha := u8(255)
+
+			pixel := (u32(alpha) << 24) | (u32(red) << 16) | (u32(green) << 8) | u32(blue)
+
+			GlobalBackBuffer.memory[index] = pixel
+		}
+	}
+}
+
+DisplayBufferInWindow :: proc(
+	Buffer: ^game_offscreen_buffer,
+	DC: w32.HDC,
+	WindowWidth, WindowHeight: u32,
+) {
+	w32.StretchDIBits(
+		DC,
+		0,
+		0,
+		i32(WindowWidth),
+		i32(WindowHeight),
+		0,
+		0,
+		Buffer.width,
+		Buffer.height,
+		raw_data(Buffer.memory),
+		&Buffer.info,
+		w32.DIB_RGB_COLORS,
+		w32.SRCCOPY,
+	)
+}
+
+GetWindowDimension :: proc(hwnd: w32.HWND) -> window_dimension {
+	Result: window_dimension
+
+	ClientRect: w32.RECT
+	w32.GetClientRect(hwnd, &ClientRect)
+	Result.width = u32(ClientRect.right - ClientRect.left)
+	Result.height = u32(ClientRect.bottom - ClientRect.top)
+
+	return Result
+}
 
 WindowProc :: proc "stdcall" (
 	hwnd: w32.HWND,
@@ -23,6 +113,14 @@ WindowProc :: proc "stdcall" (
 
 	case w32.WM_DESTROY:
 		w32.PostQuitMessage(0)
+		return 0
+
+	case w32.WM_PAINT:
+		Paint: w32.PAINTSTRUCT
+		dc: w32.HDC = w32.BeginPaint(hwnd, &Paint)
+		dimension: window_dimension = GetWindowDimension(hwnd)
+		DisplayBufferInWindow(&GlobalBackBuffer, dc, dimension.width, dimension.height)
+		w32.EndPaint(hwnd, &Paint)
 		return 0
 
 	case:
@@ -48,6 +146,8 @@ main :: proc() {
 	}
 
 	hInstance := cast(w32.HANDLE)w32.GetModuleHandleW(nil)
+
+	InitBackBuffer(&GlobalBackBuffer, 1280, 720)
 
 	wc: w32.WNDCLASSW
 	wc.style = w32.CS_HREDRAW | w32.CS_VREDRAW
@@ -78,9 +178,11 @@ main :: proc() {
 
 	if hwnd != nil {
 		GlobalRunning = true
+		DeviceContext := w32.GetDC(hwnd)
+		blue_offset: i32 = 0
+		green_offset: i32 = 0
 
 		for GlobalRunning {
-
 			w32.ShowWindow(hwnd, w32.SW_SHOW)
 			w32.UpdateWindow(hwnd)
 
@@ -94,6 +196,17 @@ main :: proc() {
 				w32.TranslateMessage(&msg)
 				w32.DispatchMessageW(&msg)
 			}
+
+			RenderWeirdGradient(blue_offset, green_offset)
+			dimension := GetWindowDimension(hwnd)
+			DisplayBufferInWindow(
+				&GlobalBackBuffer,
+				DeviceContext,
+				dimension.width,
+				dimension.height,
+			)
+			blue_offset += 1
+			green_offset += 2
 		}
 
 	}
