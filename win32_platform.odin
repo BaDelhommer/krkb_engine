@@ -21,6 +21,33 @@ window_dimension :: struct {
 GlobalBackBuffer: game_offscreen_buffer
 GlobalRunning: bool = false
 
+TileMap := [9][9]u32 {
+	{1, 1, 1, 1, 1, 1, 1, 1, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 0, 0, 0, 0, 0, 0, 0, 1},
+	{1, 1, 1, 1, 1, 1, 1, 1, 1},
+}
+
+InitTileMap :: proc(TileMap: [9][9]u32, DeviceContext: w32.HDC) {
+	for y in 0 ..< len(TileMap) {
+		for x in 0 ..< len(TileMap[y]) {
+			if TileMap[x][y] == 1 {
+				Tile: w32.RECT
+				Tile.left = i32(x * 16)
+				Tile.right = i32(x * 16 + 16)
+				Tile.top = i32(y * 16)
+				Tile.bottom = i32(y * 16 + 16)
+				w32.FillRect(DeviceContext, &Tile, w32.HBRUSH(w32.GetStockObject(w32.WHITE_BRUSH)))
+			}
+		}
+	}
+}
+
 InitBackBuffer :: proc(Buffer: ^game_offscreen_buffer, width, height: i32) {
 
 	if Buffer.memory != nil {
@@ -106,9 +133,14 @@ WindowProc :: proc "stdcall" (
 	context = runtime.default_context()
 
 	switch msg {
+	case w32.WM_SIZE:
+		w32.InvalidateRect(hwnd, nil, true)
+		return 0
+
 	case w32.WM_CLOSE:
 		GlobalRunning = false
 		w32.DestroyWindow(hwnd)
+		FreeBackBuffer(&GlobalBackBuffer)
 		return 0
 
 	case w32.WM_DESTROY:
@@ -189,15 +221,35 @@ main :: proc() {
 			msg: w32.MSG
 
 			for w32.PeekMessageW(&msg, nil, 0, 0, w32.PM_REMOVE) != false {
-				if msg.message == w32.WM_QUIT {
+				VKCode := u32(msg.wParam)
+				switch msg.message {
+
+				case w32.WM_QUIT:
 					GlobalRunning = false
+
+				case w32.WM_KEYDOWN:
+					if VKCode == 'W' {
+						green_offset -= 10
+					} else if VKCode == 'S' {
+						green_offset += 10
+					} else if VKCode == 'A' {
+						blue_offset += 10
+					} else if VKCode == 'D' {
+						blue_offset -= 10
+					}
+					if VKCode == w32.VK_ESCAPE {
+						w32.PostQuitMessage(0)
+						GlobalRunning = false
+					}
 				}
 
 				w32.TranslateMessage(&msg)
 				w32.DispatchMessageW(&msg)
+
 			}
 
-			RenderWeirdGradient(blue_offset, green_offset)
+			//			RenderWeirdGradient(blue_offset, green_offset)
+			InitTileMap(TileMap, DeviceContext)
 			dimension := GetWindowDimension(hwnd)
 			DisplayBufferInWindow(
 				&GlobalBackBuffer,
@@ -205,10 +257,9 @@ main :: proc() {
 				dimension.width,
 				dimension.height,
 			)
-			blue_offset += 1
-			green_offset += 2
+			if !GlobalRunning {
+				FreeBackBuffer(&GlobalBackBuffer)
+			}
 		}
-
 	}
-
 }
